@@ -5,7 +5,11 @@ import torch
 import torch.nn as nn
 
 from utils.downloads import attempt_download
+import torch.serialization
+from models.yolo import DetectionModel  # Ensure that this import matches your code structure
 
+# Allowlist the DetectionModel class for safe deserialization
+torch.serialization.add_safe_globals([DetectionModel])
 
 class Sum(nn.Module):
     # Weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
@@ -60,8 +64,6 @@ class Ensemble(nn.ModuleList):
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         y = [module(x, augment, profile, visualize)[0] for module in self]
-        # y = torch.stack(y).max(0)[0]  # max ensemble
-        # y = torch.stack(y).mean(0)  # mean ensemble
         y = torch.cat(y, 1)  # nms ensemble
         return y, None  # inference, train output
 
@@ -221,9 +223,9 @@ class End2End(nn.Module):
     def __init__(self, model, max_obj=100, iou_thres=0.45, score_thres=0.25, max_wh=None, device=None, n_classes=80):
         super().__init__()
         device = device if device else torch.device('cpu')
-        assert isinstance(max_wh,(int)) or max_wh is None
+        assert isinstance(max_wh, (int)) or max_wh is None
         self.model = model.to(device)
-        self.model.model[-1].end2end = True
+        self.model.model[-1].end2end = True  # Corrected indentation
         self.patch_model = ONNX_TRT if max_wh is None else ONNX_ORT
         self.end2end = self.patch_model(max_obj, iou_thres, score_thres, max_wh, device, n_classes)
         self.end2end.eval()
@@ -233,14 +235,14 @@ class End2End(nn.Module):
         x = self.end2end(x)
         return x
 
-
 def attempt_load(weights, device=None, inplace=True, fuse=True):
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
     from models.yolo import Detect, Model
 
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
-        ckpt = torch.load(attempt_download(w), map_location='cpu')  # load
+        # Set weights_only=False to allow loading full objects
+        ckpt = torch.load(attempt_download(w), map_location="cpu", weights_only=False)  # load
         ckpt = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
 
         # Model compatibility updates
@@ -256,9 +258,6 @@ def attempt_load(weights, device=None, inplace=True, fuse=True):
         t = type(m)
         if t in (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU, Detect, Model):
             m.inplace = inplace  # torch 1.7.0 compatibility
-            # if t is Detect and not isinstance(m.anchor_grid, list):
-            #    delattr(m, 'anchor_grid')
-            #    setattr(m, 'anchor_grid', [torch.zeros(1)] * m.nl)
         elif t is nn.Upsample and not hasattr(m, 'recompute_scale_factor'):
             m.recompute_scale_factor = None  # torch 1.11.0 compatibility
 
